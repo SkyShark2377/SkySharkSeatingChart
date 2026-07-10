@@ -1,4 +1,4 @@
-const CACHE_NAME = 'seating-suite-cache-v1';
+const CACHE_NAME = 'seating-suite-cache-v2';
 
 // We must cache your local files AND the external CDNs
 const ASSETS_TO_CACHE = [
@@ -54,4 +54,10 @@ self.addEventListener('fetch', (event) => {
             });
         })
     );
+});
+
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
 });
