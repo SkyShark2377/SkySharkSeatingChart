@@ -1,17 +1,17 @@
 const { createApp, ref, computed, watch, nextTick, onMounted } = Vue;
 
-const app = createApp({
+createApp({
     setup() {
         const currentTab = ref('layout');
         const isSidebarOpen = ref(true);
         const rosterUpdateNonce = ref(0); // Reactive update trigger
-
+		const showInstructionsModal = ref(false);
         const STORAGE_KEY = 'ClassroomSeatingSuite_LocalPersistence_v1';
 
         // --- HYDRATION PERSISTENCE ENGINE ---
         const savedRawData = localStorage.getItem(STORAGE_KEY);
         let restoredState = {
-            students: {}, periods: {}, roomWidthFeet: 30, roomLengthFeet: 25, globalDeskWidth: 24, globalDeskLength: 18, minSeparationInches: 48, activePeriodId: null
+            students: {}, periods: {}, roomWidthFeet: 30, roomLengthFeet: 25, globalDeskWidth: 24, globalDeskLength: 18, minSeparationInches: 48, activePeriodId: null, isDeskLockEnabled: false
         };
 
         if (savedRawData) {
@@ -33,8 +33,7 @@ const app = createApp({
         const uiRowCount = ref(4);
         const uiPodLength = ref(3);
         const isSnapEnabled = ref(true);
-		
-		const showAssetLibrary = ref(false);
+        const isDeskLockEnabled = ref(restoredState.isDeskLockEnabled || false);
 
         // FIXED INITIALIZATION string context checks pulling the string key entry directly
         const periodKeysList = Object.keys(periods.value);
@@ -98,7 +97,7 @@ const app = createApp({
 
         // --- AUTOMATED LOCAL STORAGE WATCHER LOOP ---
         watch(() => ({
-            students: students.value, periods: periods.value, roomWidthFeet: roomWidthFeet.value, roomLengthFeet: roomLengthFeet.value, globalDeskWidth: globalDeskWidth.value, globalDeskLength: globalDeskLength.value, minSeparationInches: minSeparationInches.value, activePeriodId: activeLayoutPeriodId.value
+            students: students.value, periods: periods.value, roomWidthFeet: roomWidthFeet.value, roomLengthFeet: roomLengthFeet.value, globalDeskWidth: globalDeskWidth.value, globalDeskLength: globalDeskLength.value, minSeparationInches: minSeparationInches.value, activePeriodId: activeLayoutPeriodId.value, isDeskLockEnabled: isDeskLockEnabled.value
         }), (snapshot) => { localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot)); }, { deep: true });
 
         // --- CANVAS TRACKING HOOKS ---
@@ -114,7 +113,6 @@ const app = createApp({
 
         function saveEdit() {
             editingStudentId.value = null;
-            // Force a canvas refresh to update names on desks if the name changed
             CanvasEngine.loadLayout(activeLayoutPeriodId.value);
         }
 
@@ -167,13 +165,8 @@ const app = createApp({
 
         // --- IMPORT / EXPORT ENGINE ---
         function exportData() {
-            // 1. Gather the Vue State
             const vueStateData = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-            
-            // 2. Gather the Canvas Engine Layout
             const canvasLayoutData = JSON.parse(localStorage.getItem('ClassroomSeatingSuite_CanvasLayout_v1') || '[]');
-            
-            // 3. Gather all Period Assignments
             const assignmentsData = {};
             if (vueStateData.periods) {
                 Object.keys(vueStateData.periods).forEach(periodId => {
@@ -185,7 +178,6 @@ const app = createApp({
                 });
             }
 
-            // 4. Create the Master Bundle
             const masterBundle = {
                 version: "2.0",
                 vueState: vueStateData,
@@ -193,7 +185,7 @@ const app = createApp({
                 assignments: assignmentsData
             };
 
-            const dataStr = JSON.stringify(masterBundle, null, 2); // Added spacing for readability
+            const dataStr = JSON.stringify(masterBundle, null, 2); 
             const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
             
             const exportFileDefaultName = 'ClassroomSeatingData.json';
@@ -204,59 +196,52 @@ const app = createApp({
         }
 
         function importData(event) {
-            const file = event.target.files ? event.target.files[0] : null;
-            if (!file) {
-                console.error("No file selected.");
-                return;
+    const file = event.target.files ? event.target.files[0] : null;
+    if (!file) {
+        console.error("No file selected.");
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const importedData = JSON.parse(e.target.result);
+            
+            // 1. Restore the Vue state (including isDeskLockEnabled)
+            if (importedData.vueState) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(importedData.vueState));
+            }
+            // 2. Restore the Canvas layout
+            if (importedData.canvasLayout) {
+                localStorage.setItem('ClassroomSeatingSuite_CanvasLayout_v1', JSON.stringify(importedData.canvasLayout));
+            }
+            // 3. Restore the assignments
+            if (importedData.assignments) {
+                Object.keys(importedData.assignments).forEach(periodId => {
+                    localStorage.setItem('ClassroomSeatingSuite_Assignments_' + periodId, JSON.stringify(importedData.assignments[periodId]));
+                });
             }
 
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const importedData = JSON.parse(e.target.result);
-                    
-                    // Backward Compatibility: Check if it's an old V1 file (just the Vue state)
-                    if (!importedData.version && !importedData.vueState) {
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(importedData));
-                    } 
-                    // New V2 Master Bundle Format
-                    else {
-                        if (importedData.vueState) {
-                            localStorage.setItem(STORAGE_KEY, JSON.stringify(importedData.vueState));
-                        }
-                        if (importedData.canvasLayout) {
-                            localStorage.setItem('ClassroomSeatingSuite_CanvasLayout_v1', JSON.stringify(importedData.canvasLayout));
-                        }
-                        if (importedData.assignments) {
-                            Object.keys(importedData.assignments).forEach(periodId => {
-                                localStorage.setItem('ClassroomSeatingSuite_Assignments_' + periodId, JSON.stringify(importedData.assignments[periodId]));
-                            });
-                        }
-                    }
-
-                    alert("Data imported successfully! The application will now reload.");
-                    window.location.reload();
-                } catch (err) { 
-                    console.error(err);
-                    alert("Invalid file format. Please ensure you are importing a valid Classroom Seating Data JSON file."); 
-                }
-            };
-            reader.readAsText(file);
+            alert("Data imported successfully! The application will now reload.");
+            window.location.reload();
+        } catch (err) { 
+            console.error(err);
+            alert("Invalid file format. Please ensure you are importing a valid Classroom Seating Data JSON file."); 
         }
+    };
+    reader.readAsText(file);
+}
 
         function handleApplyRestriction() {
             const idA = selectedIdA.value;
             const idB = selectedIdB.value;
             
-            // 1. Safety verification checks
             if (!idA || !idB || idA === idB) return;
             if (!students.value[idA] || !students.value[idB]) return;
 
-            // Ensure array initialization defense
             if (!students.value[idA].restrictedStudentIds) students.value[idA].restrictedStudentIds = [];
             if (!students.value[idB].restrictedStudentIds) students.value[idB].restrictedStudentIds = [];
 
-            // 2. Add mutual rules using array re-assignment to explicitly notify Vue
             if (!students.value[idA].restrictedStudentIds.includes(idB)) {
                 students.value[idA].restrictedStudentIds = [...students.value[idA].restrictedStudentIds, idB];
             }
@@ -264,13 +249,11 @@ const app = createApp({
                 students.value[idB].restrictedStudentIds = [...students.value[idB].restrictedStudentIds, idA];
             }
 
-            // 3. Reset input states
             searchA.value = ''; 
             searchB.value = '';
             selectedIdA.value = null; 
             selectedIdB.value = null;
 
-            // 4. Force global top-level object trigger and call engine validation
             students.value = { ...students.value };
             triggerRosterValidation();
         }
@@ -286,7 +269,6 @@ const app = createApp({
         function handleAutoAssign() {
             if (!CanvasEngine.fabricCanvas) return;
 
-            // FIX: Explicitly ensure the furniture object actually contains seats
             const furnitureGroups = CanvasEngine.fabricCanvas.getObjects().filter(o => o.isFurniture && o.seats);
             const allSeatsPool = [];
             furnitureGroups.forEach(g => g.seats.forEach(s => allSeatsPool.push({ group: g, seat: s })));
@@ -308,6 +290,7 @@ const app = createApp({
             const preferredPool = shuffleArray(unseatedStudents.filter(s => s.preferredSeating));
             const generalPool = shuffleArray(unseatedStudents.filter(s => !s.preferredSeating));
             const sortedStudents = [...preferredPool, ...generalPool];
+
 
             sortedStudents.forEach(student => {
                 let bestNode = null; let minimumViolationsFound = 999;
@@ -379,6 +362,13 @@ const app = createApp({
             triggerRosterValidation();
         }
 
+		// Helper to format inches into Feet & Inches string
+		function formatSeparation(totalInches) {
+			const feet = Math.floor(totalInches / 12);
+			const inches = totalInches % 12;
+			return `${feet}' ${inches}"`;
+		}
+
         function handleCreateStudent() {
             if (!newStudentForm.value.name.trim()) return;
             const id = 'std_' + Math.random().toString(36).substr(2, 9).toUpperCase();
@@ -408,6 +398,20 @@ const app = createApp({
                 const u = { ...students.value }; delete u[id]; students.value = u; 
                 handleClearAssignments(); 
             } 
+        }
+		
+		function handleRemoveStudentFromDesk(studentId) {
+            if (!CanvasEngine.fabricCanvas) return;
+            CanvasEngine.fabricCanvas.getObjects().forEach(o => {
+                if (o.isFurniture && o.seats) {
+                    o.seats.forEach(s => {
+                        if (s.assignedStudentId === studentId && !s.isLocked) {
+                            CanvasEngine.assignStudentToSeatObject(o, s, null, "Empty Seat", false);
+                        }
+                    });
+                }
+            });
+            triggerRosterValidation();
         }
 
         function hideDropdownDelayed(t) { setTimeout(() => { if (t === 'A') showDropdownA.value = false; if (t === 'B') showDropdownB.value = false; }, 200); }
@@ -441,51 +445,34 @@ const app = createApp({
         function handleSpawnSingle() { CanvasEngine.spawnSingleDesk(globalDeskWidth.value, globalDeskLength.value); }
         function handleSpawnRow() { CanvasEngine.spawnRow(uiRowCount.value, globalDeskWidth.value, globalDeskLength.value); }
         function handleSpawnPod() { CanvasEngine.spawnPod(uiPodLength.value, globalDeskWidth.value, globalDeskLength.value); }
-        // NEW: Handler for non-student assets
-        function handleSpawnAsset(assetType) {
-            CanvasEngine.spawnAsset(assetType);
-        }
-		function handleWipeCanvas() { CanvasEngine.clear(); }
+        function handleSpawnAsset(assetType) { CanvasEngine.spawnAsset(assetType); }
+        function handleWipeCanvas() { CanvasEngine.clear(); }
+        
         function handleToggleSnap() { isSnapEnabled.value = !isSnapEnabled.value; CanvasEngine.setSnap(isSnapEnabled.value); }
+        function handleToggleDeskLock() { isDeskLockEnabled.value = !isDeskLockEnabled.value; CanvasEngine.setDeskLock(isDeskLockEnabled.value); }
+        
         function shuffleArray(arr) { return arr.sort(() => Math.random() - 0.5); }
-		function handleZoomIn() { CanvasEngine.zoomCanvas(1.25); }
+        function handleZoomIn() { CanvasEngine.zoomCanvas(1.25); }
         function handleZoomOut() { CanvasEngine.zoomCanvas(0.8); }
         function handleResetView() { CanvasEngine.recalculateDimensions(); }
 
         window.addEventListener('canvas-layout-modified', () => { triggerRosterValidation(); });
-		
 
         onMounted(() => {
-			nextTick(() => {
-				// 1. Initialize
-				CanvasEngine.init('classroomCanvas', roomWidthFeet.value * 12, roomLengthFeet.value * 12);
-				
-				// 2. Load the objects (this populates the fabricCanvas objects array)
-				if (activeLayoutPeriodId.value) {
-					CanvasEngine.loadLayout(activeLayoutPeriodId.value);
-				}
-				
-				// 3. Finalize the view to ensure the border matches the room dimensions
-				CanvasEngine.recalculateDimensions();
-				triggerRosterValidation();
-			});
-		});
+            nextTick(() => {
+                CanvasEngine.init('classroomCanvas', roomWidthFeet.value * 12, roomLengthFeet.value * 12);
+                if (activeLayoutPeriodId.value) {
+                    CanvasEngine.loadLayout(activeLayoutPeriodId.value);
+                }
+                CanvasEngine.setDeskLock(isDeskLockEnabled.value); // Apply saved lock state to loaded desks
+                CanvasEngine.recalculateDimensions();
+                triggerRosterValidation();
+            });
+        });
 
         return {
-            currentTab, isSidebarOpen, globalDeskWidth, globalDeskLength, uiRowCount, uiPodLength, 
-            isSnapEnabled, roomWidthFeet, roomLengthFeet, minSeparationInches, handleRoomSizeChange, 
-            updateDeskSizes() {}, students, periods, selectedPeriodId, activeLayoutPeriodId, 
-            newStudentForm, newPeriodName, searchA, searchB, selectedIdA, selectedIdB, showDropdownA, 
-            showDropdownB, studentCount, periodCount, currentSelectedPeriod, activePeriodStudents, 
-            unseatedRosterCount, availableStudentsForPeriod, assignedStudentsForPeriod, filteredA, 
-            filteredB, handleCreateStudent, selectStudent, handleApplyRestriction, handleDeleteRestriction, 
-            handleDeleteStudent, hideDropdownDelayed, handleCreatePeriod, handleDeletePeriod, 
-            shuttleToRoster, shuttleFromRoster, handleSpawnSingle, handleSpawnRow, handleSpawnPod, 
-            handleWipeCanvas, handleToggleSnap, handleRosterDragStart, handleCanvasRosterDrop, 
-            isStudentSeatedOnCanvas, handleLayoutPeriodChange, handleAutoAssign, handleClearAssignments, 
-            triggerRosterValidation, rosterUpdateNonce, editingStudentId, startEdit, saveEdit, 
-            exportData, importData, showAssetLibrary, handleSpawnAsset,
-			handleZoomIn, handleZoomOut, handleResetView
+            currentTab, isSidebarOpen, globalDeskWidth, globalDeskLength, uiRowCount, uiPodLength, isSnapEnabled, isDeskLockEnabled, roomWidthFeet, roomLengthFeet, minSeparationInches, handleRoomSizeChange, updateDeskSizes() {}, students, periods, selectedPeriodId, activeLayoutPeriodId, newStudentForm, newPeriodName, searchA, searchB, selectedIdA, selectedIdB, showDropdownA, showDropdownB, studentCount, periodCount, currentSelectedPeriod, activePeriodStudents, unseatedRosterCount, availableStudentsForPeriod, assignedStudentsForPeriod, filteredA, filteredB, handleCreateStudent, selectStudent, handleApplyRestriction, handleDeleteRestriction, handleDeleteStudent, hideDropdownDelayed, handleCreatePeriod, handleDeletePeriod, shuttleToRoster, shuttleFromRoster, handleSpawnSingle, handleSpawnRow, handleSpawnPod, handleSpawnAsset, handleWipeCanvas, handleToggleSnap, handleToggleDeskLock, handleRosterDragStart, handleCanvasRosterDrop, isStudentSeatedOnCanvas, handleLayoutPeriodChange, handleAutoAssign, handleClearAssignments, triggerRosterValidation, rosterUpdateNonce, editingStudentId, startEdit, saveEdit, exportData, importData, handleResetView, handleZoomIn, handleZoomOut, showInstructionsModal,
+			formatSeparation, handleRemoveStudentFromDesk
         };
     }
 }).mount('#app');
