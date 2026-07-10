@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Classroom Seating Chart Suite</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body id="app" class="bg-gray-200 h-screen flex font-sans select-none overflow-hidden">
+
+    <aside v-show="isSidebarOpen" class="w-80 bg-white border-r border-gray-200 p-4 flex flex-col gap-5 overflow-y-auto shadow-2xl shrink-0 z-20 h-full relative">
+        
+        <div v-show="currentTab === 'layout'" class="flex flex-col gap-4 text-xs">
+            <div>
+                <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Active Class Period</label>
+                <select v-model="activeLayoutPeriodId" @change="handleLayoutPeriodChange" class="w-full px-3 py-2 border border-gray-300 rounded-md bg-white font-semibold text-blue-900 focus:outline-none focus:border-blue-500">
+                    <option v-if="periodCount === 0" value="null">No periods created yet...</option>
+                    <option v-for="p in periods" :key="p.id" :value="p.id" v-text="p.name"></option>
+                </select>
+            </div>
+
+            <div class="bg-blue-50 p-3 rounded-lg border border-blue-200 flex flex-col gap-2">
+                <span class="font-bold text-blue-950 uppercase text-[10px] tracking-wider">Placement Controls</span>
+                
+                <div>
+                    <label class="block font-medium text-gray-700 mb-1">Min Separation: <span class="font-bold text-blue-700"><span v-text="minSeparationInches"></span> in</span></label>
+                    <input type="range" v-model.number="minSeparationInches" @input="triggerRosterValidation" min="24" max="120" step="6" class="w-full accent-blue-600">
+                    <p class="text-[10px] text-gray-400 mt-0.5">Prevents restricted students from sitting too close radically.</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 mt-1">
+                    <button @click="handleAutoAssign" :disabled="!activeLayoutPeriodId || activeLayoutPeriodId === 'null'" class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 text-white font-bold py-1.5 px-1 rounded shadow text-center cursor-pointer transition">
+                        🎲 Auto-Assign
+                    </button>
+                    <button @click="handleClearAssignments" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-1.5 px-1 rounded shadow text-center cursor-pointer transition">
+                        🚫 Clear Seats
+                    </button>
+                </div>
+                
+                <div class="grid grid-cols-3 gap-1 mt-1 text-[10px]">
+                    <button @click="handleZoomIn" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
+                        ➕ Zoom
+                    </button>
+                    <button @click="handleZoomOut" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
+                        ➖ Zoom
+                    </button>
+                    <button @click="handleResetView" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
+                        🔍 Reset
+                    </button>
+                </div>
+                <p class="text-[9px] text-gray-500 italic text-center">Scroll to Zoom. Shift+Drag to Pan. Dbl-click to Lock.</p>
+                <p class="text-[9px] text-gray-500 italic text-center">Double-click an assigned seat on the board to Lock/Unlock it.</p>
+            </div>
+
+            <div v-if="activeLayoutPeriodId && activeLayoutPeriodId !== 'null'" class="border border-gray-200 rounded-lg bg-gray-50 flex flex-col max-h-48 overflow-hidden">
+                <div class="bg-gray-100 border-b p-2 font-bold text-gray-600 text-[10px] uppercase tracking-wider flex justify-between">
+                    <span>Drag Students to Seats</span>
+                    <span class="hidden" v-text="rosterUpdateNonce"></span>
+                    <span class="bg-gray-200 px-1.5 py-0.2 rounded-full text-gray-500" v-text="unseatedRosterCount"></span>
+                </div>
+                <div class="overflow-y-auto p-1.5 flex flex-col gap-1">
+                    <div v-for="s in activePeriodStudents" :key="s.id"
+                         draggable="true"
+                         @dragstart="handleRosterDragStart($event, s.id)"
+                         :class="isStudentSeatedOnCanvas(s.id) ? 'bg-green-100 border-green-400 text-green-800 font-bold' : 'bg-white border-gray-200 text-gray-700'"
+                         class="border p-1.5 rounded shadow-sm font-semibold flex justify-between items-center cursor-grab active:cursor-grabbing hover:border-blue-400 transition-all duration-200">
+                        <span v-text="s.name"></span>
+                        <span v-if="s.preferredSeating" class="bg-amber-100 text-amber-800 text-[8px] px-1 rounded font-bold">FRONT</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-show="currentTab === 'students'" class="flex flex-col gap-5 text-xs">
+            <h2 class="text-sm font-bold text-gray-900 border-b pb-1 border-gray-100">Add New Student</h2>
+            <form @submit.prevent="handleCreateStudent" class="flex flex-col gap-4">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Full Name</label>
+                    <input type="text" v-model.trim="newStudentForm.name" placeholder="First and Last Name" required class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Gender</label>
+                    <select v-model="newStudentForm.gender" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white focus:outline-none focus:border-blue-500">
+                        <option value="Unspecified">Select Gender...</option>
+                        <option value="Female">Female</option>
+                        <option value="Male">Male</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-2 py-1">
+                    <input type="checkbox" id="prefSeat" v-model="newStudentForm.preferredSeating" class="w-4 h-4 text-blue-600 border-gray-300 rounded">
+                    <label for="prefSeat" class="text-sm font-medium text-gray-700 cursor-pointer">Requires Preferred Seating</label>
+                </div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-md text-sm transition cursor-pointer shadow">Save Student Profile</button>
+            </form>
+
+            <hr class="border-gray-200">
+
+            <div>
+                <h2 class="text-sm font-bold text-gray-900 mb-1 border-b pb-1 border-gray-100">Behavioral Restrictions</h2>
+                <p class="text-xs text-gray-400 mb-3">Keep students separated.</p>
+                <div class="flex flex-col gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200 relative">
+                    <div>
+                        <input type="text" v-model="searchA" @focus="showDropdownA = true" @blur="hideDropdownDelayed('A')" placeholder="Student A..." class="w-full px-2 py-1 border rounded text-xs bg-white">
+                        <div v-if="showDropdownA && filteredA.length" class="absolute z-30 w-64 bg-white border max-h-32 overflow-y-auto rounded shadow-lg text-xs divide-y divide-gray-100">
+                            <div v-for="s in filteredA" :key="s.id" @mousedown="selectStudent('A', s)" v-text="s.name" class="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-gray-700"></div>
+                        </div>
+                    </div>
+                    <div class="text-center font-bold text-[10px] text-gray-400 my-0.5">MUST NOT SIT NEAR</div>
+                    <div>
+                        <input type="text" v-model="searchB" @focus="showDropdownB = true" @blur="hideDropdownDelayed('B')" placeholder="Student B..." class="w-full px-2 py-1 border rounded text-xs bg-white">
+                        <div v-if="showDropdownB && filteredB.length" class="absolute z-30 w-64 bg-white border max-h-32 overflow-y-auto rounded shadow-lg text-xs divide-y divide-gray-100">
+                            <div v-for="s in filteredB" :key="s.id" @mousedown="selectStudent('B', s)" v-text="s.name" class="px-2 py-1.5 hover:bg-blue-50 cursor-pointer text-gray-700"></div>
+                        </div>
+                    </div>
+                    <button @click="handleApplyRestriction" :disabled="!selectedIdA || !selectedIdB" class="w-full bg-red-600 disabled:bg-gray-200 text-white font-semibold py-1.5 rounded text-xs cursor-pointer">Block Placement</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-show="currentTab === 'periods'" class="flex flex-col gap-5 text-xs">
+            <h2 class="text-sm font-bold text-gray-900 border-b pb-1 border-gray-100">Create New Class Period</h2>
+            <form @submit.prevent="handleCreatePeriod" class="flex flex-col gap-3">
+                <div>
+                    <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Period Hour / Title</label>
+                    <input type="text" v-model.trim="newPeriodNodeName" placeholder="e.g., 1st Hour Algebra" required class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500">
+                </div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-md text-sm transition shadow cursor-pointer">Initialize Class hour</button>
+            </form>
+
+            <hr class="border-gray-200">
+
+            <div>
+                <h2 class="text-sm font-bold uppercase text-gray-500 tracking-wider mb-2">Registered Class Hours</h2>
+                <div class="flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
+                    <div v-if="periodCount === 0" class="text-xs text-gray-400 italic">No class hours created yet.</div>
+                    <div v-for="p in periods" :key="p.id" 
+                         @click="selectedPeriodId = p.id"
+                         :class="selectedPeriodId === p.id ? 'bg-blue-50 border-blue-400 text-blue-900' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'"
+                         class="flex justify-between items-center px-3 py-2 border rounded-md text-xs font-semibold transition cursor-pointer">
+                        <span class="truncate pr-2" v-text="p.name"></span>
+                        <button @click.stop="handleDeletePeriod(p.id)" class="text-red-500 hover:text-red-700 font-bold ml-auto text-sm cursor-pointer">&times;</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-auto flex flex-col gap-2 pt-4 border-t border-gray-100 text-xs shrink-0">
+            <button @click="handleToggleSnap" :class="isSnapEnabled ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'" class="w-full text-white text-xs font-semibold py-1.5 rounded transition cursor-pointer">
+                Snap Grid: {{ isSnapEnabled ? 'ON' : 'OFF' }}
+            </button>
+            <button @click="handleWipeCanvas" class="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold py-1.5 rounded cursor-pointer">Wipe Board</button>
+        </div>
+
+        <button @click="isSidebarOpen = false" class="absolute top-4 right-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold w-7 h-7 rounded-full flex items-center justify-center text-xs shadow border border-gray-300 cursor-pointer transition">«</button>
+    </aside>
+
+    <button v-show="!isSidebarOpen" @click="isSidebarOpen = true" class="absolute left-0 top-1/2 -translate-y-1/2 bg-blue-950 text-white hover:bg-blue-900 border border-l-0 border-blue-800 px-2 py-4 rounded-r-md shadow-2xl transition z-40 font-mono text-sm font-bold cursor-pointer">»</button>
+
+    <main class="flex-1 flex overflow-hidden relative h-full bg-gray-200 p-4">
+        
+        <div v-show="currentTab === 'layout'" id="canvasParentFrame" 
+             @dragover.prevent
+             @drop="handleCanvasRosterDrop"
+             class="w-full h-full flex items-center justify-center bg-sky-100 shadow-xl rounded-lg border border-gray-300 overflow-hidden relative">
+            <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] font-bold px-4 py-1 rounded-full uppercase tracking-wider z-10 shadow">Front of Classroom</div>
+            <canvas id="classroomCanvas" class="w-full h-full"></canvas>
+        </div>
+
+        <div v-if="currentTab === 'students'" class="w-full h-full bg-white shadow-xl rounded-lg border border-gray-200 flex flex-col overflow-hidden p-5">
+            <h2 class="text-sm font-bold text-gray-800 mb-3 uppercase tracking-wider shrink-0">Global Registry Directory</h2>
+            <div class="flex-1 border border-gray-200 rounded overflow-auto bg-gray-50 text-xs">
+                <table class="w-full border-collapse text-left bg-white">
+                    <thead class="bg-gray-100 font-bold tracking-wide border-b border-gray-200 sticky top-0 z-10 text-gray-600">
+                        <tr>
+                            <th class="px-4 py-2">Student Name</th>
+                            <th class="px-4 py-2">Gender</th>
+                            <th class="px-4 py-2 text-center">Preferred Seating</th>
+                            <th class="px-4 py-2">Enforced Restrictions</th>
+                            <th class="px-4 py-2 text-center">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 text-gray-500">
+                        <tr v-if="studentCount === 0"><td colspan="5" class="px-4 py-6 text-center italic text-gray-400">No students registered.</td></tr>
+                        <tr v-for="student in students" :key="student.id" class="hover:bg-gray-50">
+                            <td class="px-4 py-2">
+                                <input v-if="editingStudentId === student.id" v-model="student.name" class="w-full px-2 py-1 border rounded text-xs">
+                                <span v-else class="font-bold text-gray-800" v-text="student.name"></span>
+                            </td>
+                            <td class="px-4 py-2">
+                                <select v-if="editingStudentId === student.id" v-model="student.gender" class="w-full px-2 py-1 border rounded text-xs">
+                                    <option value="Female">Female</option>
+                                    <option value="Male">Male</option>
+                                    <option value="Unspecified">Unspecified</option>
+                                </select>
+                                <span v-else v-text="student.gender"></span>
+                            </td>
+                            <td class="px-4 py-2 text-center">
+                                <input v-if="editingStudentId === student.id" type="checkbox" v-model="student.preferredSeating">
+                                <span v-else v-if="student.preferredSeating" class="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold text-[10px]">FRONT</span>
+                            </td>
+                            <td class="px-4 py-2">
+                                <div class="flex flex-wrap gap-1">
+                                    <template v-for="rId in student.restrictedStudentIds" :key="rId">
+                                        <span v-if="students[rId]" class="bg-red-50 text-red-700 px-1.5 py-0.5 rounded border border-red-200 font-medium text-[10px] flex items-center gap-1 group">
+                                            ⚠️ <span v-text="students[rId].name"></span>
+                                            <button @click="handleDeleteRestriction(student.id, rId)" title="Remove restriction" class="ml-0.5 text-red-400 hover:text-red-900 cursor-pointer font-bold text-xs leading-none">&times;</button>
+                                        </span>
+                                    </template>
+                                </div>
+                            </td>
+                            <td class="px-4 py-2 text-center">
+                                <button v-if="editingStudentId === student.id" @click="saveEdit" class="text-green-600 font-bold hover:underline cursor-pointer">Save</button>
+                                <button v-else @click="startEdit(student)" class="text-blue-600 hover:underline cursor-pointer">Edit</button>
+                                <button @click="handleDeleteStudent(student.id)" class="text-red-600 hover:underline ml-2 cursor-pointer">Delete</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div v-if="currentTab === 'periods'" class="w-full h-full bg-white shadow-xl rounded-lg border border-gray-200 flex flex-col overflow-hidden p-5">
+            <div v-if="!currentSelectedPeriod" class="flex-1 flex flex-col items-center justify-center text-gray-400 italic">
+                <span>No class hour selected. Use the panel menu on the left to initialize or select a period.</span>
+            </div>
+            
+            <div v-else class="flex-1 flex flex-col overflow-hidden">
+                <h2 class="text-sm font-bold text-gray-800 mb-3 uppercase tracking-wider shrink-0">
+                    Roster Setup Dashboard: <span class="text-blue-600 font-black normal-case" v-text="currentSelectedPeriod.name"></span>
+                </h2>
+                
+                <div class="flex-1 grid grid-cols-2 gap-6 overflow-hidden text-xs">
+                    <div class="flex flex-col border border-gray-200 rounded-lg bg-gray-50 overflow-hidden">
+                        <div class="bg-gray-100 border-b border-gray-200 px-3 py-2 flex justify-between items-center shrink-0">
+                            <span class="text-xs font-bold uppercase text-gray-600 tracking-wider">Available Pool Students</span>
+                            <span class="bg-gray-200 text-gray-600 text-[10px] font-bold px-2 py-0.5 rounded-full" v-text="availableStudentsForPeriod.length"></span>
+                        </div>
+                        <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+                            <div v-if="availableStudentsForPeriod.length === 0" class="text-xs text-gray-400 italic text-center py-6">No unassigned students left.</div>
+                            <div v-for="s in availableStudentsForPeriod" :key="s.id" 
+                                 @click="shuttleToRoster(s.id)"
+                                 class="flex justify-between items-center bg-white border border-gray-200 hover:border-blue-400 p-2 rounded-md shadow-sm text-xs font-medium cursor-pointer transition group">
+                                <span class="text-gray-800" v-text="s.name"></span>
+                                <span class="text-blue-500 opacity-0 group-hover:opacity-100 font-bold text-sm transition">Add &rarr;</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex flex-col border border-gray-200 rounded-lg bg-gray-50 overflow-hidden">
+                        <div class="bg-blue-900 border-b border-blue-950 px-3 py-2 flex justify-between items-center shrink-0 text-white">
+                            <span class="text-xs font-bold uppercase tracking-wider">Assigned Class Hour Roster</span>
+                            <span class="bg-blue-800 text-blue-100 text-[10px] font-bold px-2 py-0.5 rounded-full" v-text="assignedStudentsForPeriod.length"></span>
+                        </div>
+                        <div class="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
+                            <div v-if="assignedStudentsForPeriod.length === 0" class="text-xs text-gray-400 italic text-center py-6">Roster is empty. Click left items to assign students to this class hour.</div>
+                            <div v-for="s in assignedStudentsForPeriod" :key="s.id" 
+                                 @click="shuttleFromRoster(s.id)"
+                                 class="flex justify-between items-center bg-blue-50/50 border border-blue-200 hover:border-red-400 p-2 rounded-md shadow-sm text-xs font-bold cursor-pointer transition group">
+                                <span class="text-blue-900" v-text="s.name"></span>
+                                <span class="text-red-500 opacity-0 group-hover:opacity-100 text-sm transition">&larr; Remove</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <aside class="w-72 bg-blue-950 text-white p-5 flex flex-col shadow-[-4px_0_20px_rgba(0,0,0,0.15)] shrink-0 z-30 h-full border-l border-blue-900">
+        
+        <div class="mb-6 shrink-0">
+            <h1 class="text-xl font-bold leading-tight">Classroom Seating Suite</h1>
+            <p class="text-[10px] text-blue-300 uppercase tracking-wider mt-1">Algorithmic Placement</p>
+        </div>
+        
+        <div class="flex flex-col gap-2 shrink-0">
+            <button @click="currentTab = 'layout'" :class="currentTab === 'layout' ? 'bg-blue-600 text-white font-semibold shadow-inner' : 'bg-blue-900/50 text-blue-200 hover:text-white hover:bg-blue-800'" class="px-4 py-3 rounded-md transition cursor-pointer text-left flex justify-between items-center text-sm border border-transparent" :class="currentTab === 'layout' ? 'border-blue-500' : 'border-blue-800/30'">
+                <span>Classroom Layout</span>
+            </button>
+            
+            <button @click="currentTab = 'students'" :class="currentTab === 'students' ? 'bg-blue-600 text-white font-semibold shadow-inner' : 'bg-blue-900/50 text-blue-200 hover:text-white hover:bg-blue-800'" class="px-4 py-3 rounded-md transition cursor-pointer text-left flex justify-between items-center text-sm border border-transparent" :class="currentTab === 'students' ? 'border-blue-500' : 'border-blue-800/30'">
+                <span>Student Registry</span>
+                <span class="bg-blue-950 px-2 py-0.5 rounded-full text-[10px]" v-text="studentCount"></span>
+            </button>
+            
+            <button @click="currentTab = 'periods'" :class="currentTab === 'periods' ? 'bg-blue-600 text-white font-semibold shadow-inner' : 'bg-blue-900/50 text-blue-200 hover:text-white hover:bg-blue-800'" class="px-4 py-3 rounded-md transition cursor-pointer text-left flex justify-between items-center text-sm border border-transparent" :class="currentTab === 'periods' ? 'border-blue-500' : 'border-blue-800/30'">
+                <span>Class Periods</span>
+                <span class="bg-blue-950 px-2 py-0.5 rounded-full text-[10px]" v-text="periodCount"></span>
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto mt-4 pr-2 custom-scrollbar">
+            <div v-show="currentTab === 'layout'" class="flex flex-col gap-6 pb-2 text-xs">
+                
+                <div>
+                    <h2 class="font-bold uppercase text-blue-300 tracking-wider mb-2 text-[10px]">Classroom Room Size</h2>
+                    <div class="grid grid-cols-2 gap-2 bg-blue-900/50 p-3 rounded-lg border border-blue-800/50">
+                        <div>
+                            <label class="block text-[10px] font-semibold text-blue-200 mb-1">Width (ft)</label>
+                            <input type="number" v-model.number="roomWidthFeet" @change="handleRoomSizeChange" min="10" max="60" class="w-full px-2 py-1 border border-blue-700 bg-blue-950 text-white rounded focus:outline-none focus:border-blue-400">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-blue-200 mb-1">Length (ft)</label>
+                            <input type="number" v-model.number="roomLengthFeet" @change="handleRoomSizeChange" min="10" max="60" class="w-full px-2 py-1 border border-blue-700 bg-blue-950 text-white rounded focus:outline-none focus:border-blue-400">
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 class="font-bold uppercase text-blue-300 tracking-wider mb-2 text-[10px]">Global Desk Size</h2>
+                    <div class="grid grid-cols-2 gap-2 bg-blue-900/50 p-3 rounded-lg border border-blue-800/50">
+                        <div>
+                            <label class="block text-[10px] font-semibold text-blue-200 mb-1">Width (in)</label>
+                            <input type="number" v-model.number="globalDeskWidth" class="w-full px-2 py-1 border border-blue-700 bg-blue-950 text-white rounded focus:outline-none focus:border-blue-400">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-blue-200 mb-1">Length (in)</label>
+                            <input type="number" v-model.number="globalDeskLength" class="w-full px-2 py-1 border border-blue-700 bg-blue-950 text-white rounded focus:outline-none focus:border-blue-400">
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 class="font-bold uppercase text-blue-300 tracking-wider mb-2 text-[10px]">Add Desks & Pods</h2>
+                    <div class="flex flex-col gap-2">
+                        <button @click="handleSpawnSingle" class="w-full flex items-center gap-3 p-2 border border-blue-800/50 rounded-lg bg-blue-900/50 hover:bg-blue-800 text-left transition cursor-pointer">
+                            <div class="w-8 h-6 bg-amber-100 border border-amber-600 rounded flex items-center justify-center font-bold text-amber-800 text-[10px] shrink-0">Desk</div>
+                            <span class="font-semibold text-blue-100">Single Desk Slot</span>
+                        </button>
+                        
+                        <div class="border border-blue-800/50 bg-blue-900/50 rounded-lg p-2.5 flex flex-col gap-2">
+                            <span class="font-semibold text-blue-100">Row Layout Setup</span>
+                            <div class="flex gap-2">
+                                <input type="number" v-model.number="uiRowCount" min="2" max="12" class="w-12 px-1 border border-blue-700 bg-blue-950 text-white rounded text-center">
+                                <button @click="handleSpawnRow" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-2 rounded transition cursor-pointer">Spawn Row</button>
+                            </div>
+                        </div>
+                        
+                        <div class="border border-blue-800/50 bg-blue-900/50 rounded-lg p-2.5 flex flex-col gap-2">
+                            <span class="font-semibold text-blue-100">Face-to-Face Pod Setup</span>
+                            <div class="flex gap-2">
+                                <input type="number" v-model.number="uiPodLength" min="1" max="8" class="w-12 px-1 border border-blue-700 bg-blue-950 text-white rounded text-center">
+                                <button @click="handleSpawnPod" class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-2 rounded transition cursor-pointer">Spawn Pod</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h2 class="font-bold uppercase text-blue-300 tracking-wider mb-2 text-[10px]">Environmental Assets</h2>
+                    <div class="flex flex-col gap-2">
+                        <button @click="handleSpawnAsset('teacher_desk')" class="w-full text-left p-2 border border-slate-600 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold transition cursor-pointer">🖥️ Teacher Desk</button>
+                        
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Flooring & Rugs</div>
+                        <button @click="handleSpawnAsset('rug')" class="w-full text-left p-2 border border-sky-700 rounded-lg bg-sky-900 hover:bg-sky-800 text-white font-semibold transition cursor-pointer">🟦 Rect Rug / Zone</button>
+                        <button @click="handleSpawnAsset('rug_circle')" class="w-full text-left p-2 border border-sky-700 rounded-lg bg-sky-900 hover:bg-sky-800 text-white font-semibold transition cursor-pointer">🔵 Round Rug</button>
+                        <button @click="handleSpawnAsset('rug_half')" class="w-full text-left p-2 border border-sky-700 rounded-lg bg-sky-900 hover:bg-sky-800 text-white font-semibold transition cursor-pointer">🌗 Half-Circle Rug</button>
+                        
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Group Tables</div>
+                        <button @click="handleSpawnAsset('table_round')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">⚪ Round Table</button>
+                        <button @click="handleSpawnAsset('table_half')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🧲 Half-Circle Table</button>
+
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Room Fixtures</div>
+                        <button @click="handleSpawnAsset('smartboard')" class="w-full text-left p-2 border border-gray-600 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-semibold transition cursor-pointer">📺 Smartboard</button>
+                        <button @click="handleSpawnAsset('bookshelf')" class="w-full text-left p-2 border border-amber-700 rounded-lg bg-amber-900 hover:bg-amber-800 text-white font-semibold transition cursor-pointer">📚 Shelf</button>
+                        <button @click="handleSpawnAsset('locker')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🗄️ Lockers</button>
+                        
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Wall Elements</div>
+                        <button @click="handleSpawnAsset('door')" class="w-full text-left p-2 border border-red-800 rounded-lg bg-red-950 hover:bg-red-900 text-white font-semibold transition cursor-pointer">🚪 Doorway</button>
+                        <button @click="handleSpawnAsset('window')" class="w-full text-left p-2 border border-sky-800 rounded-lg bg-sky-950 hover:bg-sky-900 text-white font-semibold transition cursor-pointer">🪟 Window</button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="mt-2 border-t border-blue-800/50 pt-4 flex flex-col gap-3 shrink-0">
+            <button @click="exportData" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2 rounded shadow cursor-pointer transition">
+                💾 Export Config Data
+            </button>
+            <button class="w-full bg-slate-200 hover:bg-white text-slate-800 text-xs font-semibold py-2 rounded shadow cursor-pointer text-center transition"
+                    onclick="document.getElementById('importFile').click()">
+                📂 Import Layouts
+            </button>
+            <input type="file" id="importFile" @change="importData($event)" class="hidden" accept=".json">
+        </div>
+    </aside>
+
+    <script src="js/canvas-engine.js"></script>
+    <script src="js/app.js"></script>
+	<script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then((registration) => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    }, (err) => {
+                        console.log('ServiceWorker registration failed: ', err);
+                    });
+            });
+        }
+    </script>
+</body>
+</html>
