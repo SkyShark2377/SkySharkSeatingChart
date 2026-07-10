@@ -4,14 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Classroom Seating Chart Suite</title>
+    
+    <style>
+        [v-cloak] { display: none !important; }
+    </style>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#172554">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
 </head>
-<body id="app" class="bg-gray-200 h-screen flex font-sans select-none overflow-hidden">
+<body id="app" v-cloak class="bg-gray-200 h-screen flex font-sans select-none overflow-hidden">
 
     <aside v-show="isSidebarOpen" class="w-80 bg-white border-r border-gray-200 p-4 flex flex-col gap-5 overflow-y-auto shadow-2xl shrink-0 z-20 h-full relative">
         
+        <div class="flex items-center gap-3 border-b pb-2 pr-8 shrink-0">
+            <span class="font-bold text-gray-800 uppercase tracking-wider text-sm">Dashboard</span>
+            <button @click="showInstructionsModal = true" class="text-[10px] bg-blue-100 text-blue-800 hover:bg-blue-200 px-2 py-1 rounded font-bold cursor-pointer transition">
+                (?) Help
+            </button>
+        </div>
+
         <div v-show="currentTab === 'layout'" class="flex flex-col gap-4 text-xs">
             <div>
                 <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Active Class Period</label>
@@ -25,7 +43,7 @@
                 <span class="font-bold text-blue-950 uppercase text-[10px] tracking-wider">Placement Controls</span>
                 
                 <div>
-                    <label class="block font-medium text-gray-700 mb-1">Min Separation: <span class="font-bold text-blue-700"><span v-text="minSeparationInches"></span> in</span></label>
+                    <label class="block font-medium text-gray-700 mb-1">Min Separation: <span class="font-bold text-blue-700" v-text="formatSeparation(minSeparationInches)"></span></label>
                     <input type="range" v-model.number="minSeparationInches" @input="triggerRosterValidation" min="24" max="120" step="6" class="w-full accent-blue-600">
                     <p class="text-[10px] text-gray-400 mt-0.5">Prevents restricted students from sitting too close radically.</p>
                 </div>
@@ -40,18 +58,10 @@
                 </div>
                 
                 <div class="grid grid-cols-3 gap-1 mt-1 text-[10px]">
-                    <button @click="handleZoomIn" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
-                        ➕ Zoom
-                    </button>
-                    <button @click="handleZoomOut" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
-                        ➖ Zoom
-                    </button>
-                    <button @click="handleResetView" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">
-                        🔍 Reset
-                    </button>
+                    <button @click="handleZoomIn" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">➕ Zoom</button>
+                    <button @click="handleZoomOut" class="bg-slate-600 hover:bg-slate-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">➖ Zoom</button>
+                    <button @click="handleResetView" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 rounded shadow cursor-pointer transition">🔍 Reset</button>
                 </div>
-                <p class="text-[9px] text-gray-500 italic text-center">Scroll to Zoom. Shift+Drag to Pan. Dbl-click to Lock.</p>
-                <p class="text-[9px] text-gray-500 italic text-center">Double-click an assigned seat on the board to Lock/Unlock it.</p>
             </div>
 
             <div v-if="activeLayoutPeriodId && activeLayoutPeriodId !== 'null'" class="border border-gray-200 rounded-lg bg-gray-50 flex flex-col max-h-48 overflow-hidden">
@@ -66,8 +76,17 @@
                          @dragstart="handleRosterDragStart($event, s.id)"
                          :class="isStudentSeatedOnCanvas(s.id) ? 'bg-green-100 border-green-400 text-green-800 font-bold' : 'bg-white border-gray-200 text-gray-700'"
                          class="border p-1.5 rounded shadow-sm font-semibold flex justify-between items-center cursor-grab active:cursor-grabbing hover:border-blue-400 transition-all duration-200">
+                        
                         <span v-text="s.name"></span>
-                        <span v-if="s.preferredSeating" class="bg-amber-100 text-amber-800 text-[8px] px-1 rounded font-bold">FRONT</span>
+                        
+                        <div class="flex items-center gap-2">
+                            <span v-if="s.preferredSeating" class="bg-amber-100 text-amber-800 text-[8px] px-1 rounded font-bold">FRONT</span>
+                            <button v-if="isStudentSeatedOnCanvas(s.id)" 
+                                    @click="handleRemoveStudentFromDesk(s.id)" 
+                                    class="text-red-500 hover:text-red-700 font-bold text-sm cursor-pointer px-1">
+                                &times;
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -124,7 +143,7 @@
             <form @submit.prevent="handleCreatePeriod" class="flex flex-col gap-3">
                 <div>
                     <label class="block text-xs font-bold uppercase text-gray-500 mb-1">Period Hour / Title</label>
-                    <input type="text" v-model.trim="newPeriodNodeName" placeholder="e.g., 1st Hour Algebra" required class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500">
+                    <input type="text" v-model.trim="newPeriodName" placeholder="e.g., 1st Hour Algebra" required class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:border-blue-500">
                 </div>
                 <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-md text-sm transition shadow cursor-pointer">Initialize Class hour</button>
             </form>
@@ -147,9 +166,14 @@
         </div>
 
         <div class="mt-auto flex flex-col gap-2 pt-4 border-t border-gray-100 text-xs shrink-0">
-            <button @click="handleToggleSnap" :class="isSnapEnabled ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'" class="w-full text-white text-xs font-semibold py-1.5 rounded transition cursor-pointer">
-                Snap Grid: {{ isSnapEnabled ? 'ON' : 'OFF' }}
-            </button>
+            <div class="flex gap-2">
+                <button @click="handleToggleSnap" :class="isSnapEnabled ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'" class="flex-1 text-white text-[10px] font-semibold py-1.5 rounded transition cursor-pointer">
+                    Snap: {{ isSnapEnabled ? 'ON' : 'OFF' }}
+                </button>
+                <button @click="handleToggleDeskLock" :class="isDeskLockEnabled ? 'bg-amber-600 hover:bg-amber-700' : 'bg-gray-600 hover:bg-gray-700'" class="flex-1 text-white text-[10px] font-semibold py-1.5 rounded transition cursor-pointer">
+                    Desks: {{ isDeskLockEnabled ? 'LOCKED' : 'UNLOCKED' }}
+                </button>
+            </div>
             <button @click="handleWipeCanvas" class="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-semibold py-1.5 rounded cursor-pointer">Wipe Board</button>
         </div>
 
@@ -266,6 +290,52 @@
                 </div>
             </div>
         </div>
+
+        <div v-if="showInstructionsModal" class="absolute inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+                <div class="bg-blue-950 text-white px-6 py-4 flex justify-between items-center shrink-0">
+                    <h2 class="text-lg font-bold">How to Use the Seating Suite</h2>
+                    <button @click="showInstructionsModal = false" class="text-blue-200 hover:text-white text-2xl font-bold cursor-pointer leading-none">&times;</button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto text-sm text-gray-700 flex flex-col gap-6">
+                    <div>
+                        <h3 class="font-bold text-blue-900 border-b border-gray-200 pb-1 mb-2">1. Navigation & Camera</h3>
+                        <ul class="list-disc pl-5 space-y-1">
+                            <li><strong>Zoom:</strong> Use your mouse scroll wheel, or the ➕/➖ buttons.</li>
+                            <li><strong>Pan (Move Camera):</strong> Hold <kbd class="bg-gray-100 border rounded px-1">Shift</kbd> on your keyboard, then click and drag the background.</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="font-bold text-blue-900 border-b border-gray-200 pb-1 mb-2">2. Building the Classroom</h3>
+                        <ul class="list-disc pl-5 space-y-1">
+                            <li>Use the right sidebar to spawn desks, rugs, and walls.</li>
+                            <li><strong>Resize/Rotate:</strong> Click any asset to reveal the blue control handles. Drag corners to resize, drag the top handle to rotate.</li>
+                            <li><strong>Lock Desks:</strong> Click the "Desks: UNLOCKED" button in the bottom left to freeze all desks so you don't accidentally move them while assigning students.</li>
+                            <li><strong>Lock / Rename Assets:</strong> Double-click any non-desk asset (like a rug or window) to rename it and lock it into place. Double-click it again to unlock it.</li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h3 class="font-bold text-blue-900 border-b border-gray-200 pb-1 mb-2">3. Assigning Students</h3>
+                        <ul class="list-disc pl-5 space-y-1">
+                            <li><strong>Manual Drag & Drop:</strong> Select a class period on the left. Drag a student's name from the list and drop them directly onto an empty desk.</li>
+                            <li><strong>Auto-Assign:</strong> Click the "🎲 Auto-Assign" button to let the algorithm place all remaining students. It will prioritize placing "FRONT" preferred students first, and will attempt to keep restricted pairs far apart.</li>
+                            <li><strong>Lock a Student:</strong> Double-click a student's desk to lock them into that seat. The Auto-Assigner will build the rest of the room around them.</li>
+                            <li><strong>Block an Empty Desk:</strong> Double-click an empty desk to mark it as "Blocked". The Auto-Assigner will leave it empty.</li>
+                            <li><strong>Remove a Student:</strong> Hold <kbd class="bg-gray-100 border rounded px-1">Alt</kbd> and click a student's desk to instantly clear that seat.</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-50 px-6 py-4 shrink-0 flex justify-end border-t border-gray-200">
+                    <button @click="showInstructionsModal = false" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md shadow cursor-pointer transition">
+                        Got it!
+                    </button>
+                </div>
+            </div>
+        </div>
     </main>
 
     <aside class="w-72 bg-blue-950 text-white p-5 flex flex-col shadow-[-4px_0_20px_rgba(0,0,0,0.15)] shrink-0 z-30 h-full border-l border-blue-900">
@@ -351,7 +421,13 @@
                 <div>
                     <h2 class="font-bold uppercase text-blue-300 tracking-wider mb-2 text-[10px]">Environmental Assets</h2>
                     <div class="flex flex-col gap-2">
+                        
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-1 mb-1 uppercase">Casework & Teacher</div>
                         <button @click="handleSpawnAsset('teacher_desk')" class="w-full text-left p-2 border border-slate-600 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold transition cursor-pointer">🖥️ Teacher Desk</button>
+                        <button @click="handleSpawnAsset('shelf')" class="w-full text-left p-2 border border-amber-600 rounded-lg bg-amber-800 hover:bg-amber-700 text-white font-semibold transition cursor-pointer">🗄️ Open Shelf</button>
+                        <button @click="handleSpawnAsset('cabinet')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🚪 Tall Cabinet</button>
+                        <button @click="handleSpawnAsset('locker')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🔐 Lockers</button>
+                        <button @click="handleSpawnAsset('bookshelf')" class="w-full text-left p-2 border border-amber-700 rounded-lg bg-amber-900 hover:bg-amber-800 text-white font-semibold transition cursor-pointer">📚 Bookshelf</button>
                         
                         <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Flooring & Rugs</div>
                         <button @click="handleSpawnAsset('rug')" class="w-full text-left p-2 border border-sky-700 rounded-lg bg-sky-900 hover:bg-sky-800 text-white font-semibold transition cursor-pointer">🟦 Rect Rug / Zone</button>
@@ -362,14 +438,13 @@
                         <button @click="handleSpawnAsset('table_round')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">⚪ Round Table</button>
                         <button @click="handleSpawnAsset('table_half')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🧲 Half-Circle Table</button>
 
-                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Room Fixtures</div>
-                        <button @click="handleSpawnAsset('smartboard')" class="w-full text-left p-2 border border-gray-600 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-semibold transition cursor-pointer">📺 Smartboard</button>
-                        <button @click="handleSpawnAsset('bookshelf')" class="w-full text-left p-2 border border-amber-700 rounded-lg bg-amber-900 hover:bg-amber-800 text-white font-semibold transition cursor-pointer">📚 Shelf</button>
-                        <button @click="handleSpawnAsset('locker')" class="w-full text-left p-2 border border-slate-500 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-semibold transition cursor-pointer">🗄️ Lockers</button>
-                        
                         <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Wall Elements</div>
+                        <button @click="handleSpawnAsset('smartboard')" class="w-full text-left p-2 border border-gray-600 rounded-lg bg-gray-800 hover:bg-gray-700 text-white font-semibold transition cursor-pointer">📺 Smartboard</button>
                         <button @click="handleSpawnAsset('door')" class="w-full text-left p-2 border border-red-800 rounded-lg bg-red-950 hover:bg-red-900 text-white font-semibold transition cursor-pointer">🚪 Doorway</button>
                         <button @click="handleSpawnAsset('window')" class="w-full text-left p-2 border border-sky-800 rounded-lg bg-sky-950 hover:bg-sky-900 text-white font-semibold transition cursor-pointer">🪟 Window</button>
+
+                        <div class="text-[10px] text-blue-400 font-bold tracking-wider mt-2 mb-1 uppercase">Other</div>
+                        <button @click="handleSpawnAsset('misc')" class="w-full text-left p-2 border border-gray-500 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold transition cursor-pointer">📦 Misc Item</button>
                     </div>
                 </div>
 
@@ -390,15 +465,20 @@
 
     <script src="js/canvas-engine.js"></script>
     <script src="js/app.js"></script>
-	<script>
+
+    <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js')
-                    .then((registration) => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    }, (err) => {
-                        console.log('ServiceWorker registration failed: ', err);
+                navigator.serviceWorker.register('./sw.js').then(reg => {
+                    reg.addEventListener('updatefound', () => {
+                        const newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                            }
+                        });
                     });
+                });
             });
         }
     </script>
